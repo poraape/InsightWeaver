@@ -1,12 +1,12 @@
-# app_final_ui_fix.py
-# Versão com UI defensiva para evitar o erro de colunas e melhorar a exibição.
+# app_sync_fix.py
+# Versão com importações sincronizadas com o módulo de agentes.
 
 import streamlit as st
 
+# DDR-FIX (Clarity & Robustness): Removida a importação da função 'agent_suggest_questions' que não existe.
 from agents import (
     agent_unzip_and_read, 
     agent_sanitize_and_enrich, 
-    agent_suggest_questions,
     agent_code_reviewer, 
     agent_query_llm, 
     agent_present_results
@@ -31,7 +31,8 @@ st.markdown("Faça perguntas em linguagem natural sobre seus arquivos CSV.")
 # Inicialização do estado da sessão
 if 'messages' not in st.session_state: st.session_state.messages = []
 if 'data_loaded' not in st.session_state: st.session_state.data_loaded = False
-if 'suggested_questions' not in st.session_state: st.session_state.suggested_questions = []
+# DDR-FIX: Removido o estado das sugestões, pois a função não existe mais.
+# if 'suggested_questions' not in st.session_state: st.session_state.suggested_questions = []
 
 # Função para processar uma pergunta
 def process_question(question: str):
@@ -40,7 +41,7 @@ def process_question(question: str):
         st.markdown(question)
     with st.chat_message("assistant"):
         with st.status("Pensando...", expanded=True) as status:
-            status.write("Traduzindo sua pergunta...")
+            # A chamada para agent_query_llm está correta.
             result, code = agent_query_llm(question, st.session_state.manifesto, st.session_state.dataframes)
             if isinstance(result, str) and result.startswith("Falha"):
                 response_content = f"Desculpe, encontrei um erro: {result}"
@@ -73,8 +74,9 @@ with st.sidebar:
                     st.session_state.dataframes = sanitized_dfs
                     st.session_state.manifesto = manifesto
                     
-                    status.write("Etapa 3: Gerando sugestões inteligentes...")
-                    st.session_state.suggested_questions = agent_suggest_questions(manifesto)
+                    # DDR-FIX: Removida a chamada para a função de sugestão que não existe.
+                    # status.write("Etapa 3: Gerando sugestões inteligentes...")
+                    # st.session_state.suggested_questions = agent_suggest_questions(manifesto)
                     
                     st.session_state.data_loaded = True
                     st.session_state.messages = []
@@ -92,17 +94,14 @@ for message in st.session_state.messages:
         if "result" in message and message["result"] is not None:
             agent_present_results(message["result"], message["original_question"])
 
-# DDR-FIX (Robustness): Exibição das perguntas sugeridas com verificação de guarda.
-if st.session_state.data_loaded and not st.session_state.messages:
-    # Apenas tenta exibir as sugestões se a lista não estiver vazia.
-    if st.session_state.suggested_questions:
-        st.markdown("### Que tal começar com uma destas perguntas?")
-        # Usar st.container para um layout mais controlado e responsivo
-        with st.container():
-            for question in st.session_state.suggested_questions:
-                if st.button(question, use_container_width=True):
-                    process_question(question)
-                    # Não é necessário st.rerun() aqui, pois process_question já o faz.
+# DDR-FIX: Removido o bloco de exibição das perguntas sugeridas.
+# if st.session_state.data_loaded and not st.session_state.messages:
+#     if st.session_state.suggested_questions:
+#         st.markdown("### Que tal começar com uma destas perguntas?")
+#         with st.container():
+#             for question in st.session_state.suggested_questions:
+#                 if st.button(question, use_container_width=True):
+#                     process_question(question)
 
 # Input do usuário
 if prompt := st.chat_input("Qual a sua pergunta sobre os dados?"):
