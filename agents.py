@@ -1,5 +1,5 @@
-# agents_final_proactive.py
-# Versão com leitura recursiva de arquivos e agente de sugestão de perguntas.
+# agents_final_debuggable.py
+# Versão com logging de erro no agente de sugestões para facilitar a depuração.
 
 import streamlit as st
 import polars as pl
@@ -9,30 +9,72 @@ import os
 import shutil
 from pathlib import Path
 import plotly.express as px
+import ast # Usaremos ast.literal_eval para uma avaliação mais segura
 
 # --- Constantes de configuração ---
 CATEGORICAL_THRESHOLD = 0.5
 
-# --- DDR-FIX (Robustness): AGENTE 1: LEITURA BRUTA (com busca recursiva) ---
+# --- DDR-FIX (Clarity & Robustness): AGENTE 1.5: SUGESTÃO DE PERGUNTAS (com logging) ---
+def agent_suggest_questions(manifesto: str):
+    """Usa o manifesto de dados para sugerir perguntas de negócio inteligentes."""
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    prompt = f"""
+    Você é um Analista de Negócios Sênior. Sua tarefa é analisar o seguinte manifesto de dados e propor 3 perguntas de negócio perspicazes que podem ser respondidas com os dados disponíveis.
+
+    **REGRAS CRÍTICAS:**
+    1.  As perguntas devem ser claras, concisas e orientadas a insights.
+    2.  Sua resposta DEVE ser uma lista Python de strings, formatada como um bloco de código. NADA MAIS.
+    3.  Exemplo de Resposta:
+    ```python
+    ["Qual foi o total de vendas por mês?", "Quais são os 5 principais clientes por valor de compra?", "Qual a margem de lucro por categoria de produto?"]
+    ```
+
+    **MANIFESTO DE DADOS:**
+    {manifesto}
+
+    **Gere a lista de 3 perguntas agora:**
+    """
+    try:
+        response = model.generate_content(prompt)
+        
+        # Limpa a resposta para extrair apenas o conteúdo da lista
+        clean_response = response.text.strip()
+        if "```python" in clean_response:
+            clean_response = clean_response.split("```python")[1]
+        if "```" in clean_response:
+            clean_response = clean_response.split("```")[0]
+        
+        # Usa ast.literal_eval que é mais seguro que eval()
+        suggested_list = ast.literal_eval(clean_response.strip())
+        
+        if isinstance(suggested_list, list):
+            return suggested_list
+        
+        # Se não for uma lista, loga um aviso
+        st.warning(f"O agente de sugestões retornou um tipo inesperado: {type(suggested_list)}")
+        return []
+        
+    except Exception as e:
+        # Se qualquer erro ocorrer, loga o erro na interface para depuração
+        st.warning(f"Não foi possível gerar sugestões de perguntas. Erro: {e}")
+        st.info(f"Resposta bruta da IA (para depuração): {response.text}")
+        return []
+
+# ... (O resto do código de agents.py permanece o mesmo) ...
 def agent_unzip_and_read(uploaded_file):
     temp_dir = Path("./temp_data")
     if temp_dir.exists(): shutil.rmtree(temp_dir)
     temp_dir.mkdir(exist_ok=True)
     with zipfile.ZipFile(uploaded_file, 'r') as zip_ref:
         zip_ref.extractall(temp_dir)
-    
-    # Usa os.walk para encontrar todos os CSVs em qualquer subpasta
     csv_files = []
     for root, _, files in os.walk(temp_dir):
         for file in files:
             if file.endswith('.csv'):
                 csv_files.append(Path(root) / file)
-
     if not csv_files: return None
-
     dataframes = {}
     for file_path in csv_files:
-        # Usa o nome do arquivo sem extensão como chave
         df_name = file_path.stem
         try:
             df = pl.read_csv(source=file_path, has_header=True, infer_schema_length=0, ignore_errors=True)
@@ -42,35 +84,6 @@ def agent_unzip_and_read(uploaded_file):
             return None
     return dataframes
 
-# --- DDR-EXPANSION (Intelligence): AGENTE 1.5: SUGESTÃO DE PERGUNTAS ---
-def agent_suggest_questions(manifesto: str):
-    """Usa o manifesto de dados para sugerir perguntas de negócio inteligentes."""
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    prompt = f"""
-    Você é um Analista de Negócios Sênior. Sua tarefa é analisar o seguinte manifesto de dados e propor 3 perguntas de negócio perspicazes que podem ser respondidas com os dados disponíveis.
-
-    **REGRAS:**
-    1.  As perguntas devem ser claras, concisas e orientadas a insights (ex: "Qual o produto mais vendido?", "Quem é o principal fornecedor?").
-    2.  Responda com uma lista Python de strings, e nada mais.
-    3.  Exemplo de Resposta: `["Qual foi o total de vendas por mês?", "Quais são os 5 principais clientes por valor de compra?", "Qual a margem de lucro por categoria de produto?"]`
-
-    **MANIFESTO DE DADOS:**
-    {manifesto}
-
-    **Gere a lista de 3 perguntas agora:**
-    """
-    try:
-        response = model.generate_content(prompt)
-        # Tenta avaliar a resposta como uma lista Python literal
-        suggested_list = eval(response.text)
-        if isinstance(suggested_list, list):
-            return suggested_list
-        return []
-    except Exception:
-        # Se a avaliação falhar, retorna uma lista vazia
-        return []
-
-# ... (O resto dos agentes e funções atômicas permanece o mesmo) ...
 def _try_convert_to_numeric(series: pl.Series) -> pl.Series | None:
     try:
         return series.str.replace_all(",", ".", literal=True).cast(pl.Float64, strict=True)
