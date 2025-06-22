@@ -1,12 +1,12 @@
-# app_final_proactive.py
-# Versão final com sugestões de perguntas inteligentes.
+# app_final_ui_fix.py
+# Versão com UI defensiva para evitar o erro de colunas e melhorar a exibição.
 
 import streamlit as st
 
 from agents import (
     agent_unzip_and_read, 
     agent_sanitize_and_enrich, 
-    agent_suggest_questions, # Importa o novo agente
+    agent_suggest_questions,
     agent_query_llm, 
     agent_present_results
 )
@@ -32,7 +32,7 @@ if 'messages' not in st.session_state: st.session_state.messages = []
 if 'data_loaded' not in st.session_state: st.session_state.data_loaded = False
 if 'suggested_questions' not in st.session_state: st.session_state.suggested_questions = []
 
-# Função para processar uma pergunta (evita duplicação de código)
+# Função para processar uma pergunta
 def process_question(question: str):
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
@@ -91,15 +91,17 @@ for message in st.session_state.messages:
         if "result" in message and message["result"] is not None:
             agent_present_results(message["result"], message["original_question"])
 
-# DDR-EXPANSION: Exibição das perguntas sugeridas
+# DDR-FIX (Robustness): Exibição das perguntas sugeridas com verificação de guarda.
 if st.session_state.data_loaded and not st.session_state.messages:
-    st.markdown("### Que tal começar com uma destas perguntas?")
-    cols = st.columns(len(st.session_state.suggested_questions))
-    for i, question in enumerate(st.session_state.suggested_questions):
-        with cols[i]:
-            if st.button(question, use_container_width=True):
-                process_question(question)
-                st.rerun()
+    # Apenas tenta exibir as sugestões se a lista não estiver vazia.
+    if st.session_state.suggested_questions:
+        st.markdown("### Que tal começar com uma destas perguntas?")
+        # Usar st.container para um layout mais controlado e responsivo
+        with st.container():
+            for question in st.session_state.suggested_questions:
+                if st.button(question, use_container_width=True):
+                    process_question(question)
+                    # Não é necessário st.rerun() aqui, pois process_question já o faz.
 
 # Input do usuário
 if prompt := st.chat_input("Qual a sua pergunta sobre os dados?"):
