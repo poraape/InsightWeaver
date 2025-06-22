@@ -1,5 +1,5 @@
-# agents_final_bulletproof.py
-# Versão final com tratamento de exceção universal para máxima robustez.
+# agents_final_self_correcting.py
+# Versão definitiva com firewall heurístico e ciclo de auto-correção.
 
 import streamlit as st
 import polars as pl
@@ -13,7 +13,7 @@ import plotly.express as px
 # --- Constantes de configuração ---
 CATEGORICAL_THRESHOLD = 0.5
 
-# --- AGENTE 1: LEITURA BRUTA (Sem alterações) ---
+# --- Funções Atômicas e Agentes de Leitura/Sanitização (Sem alterações) ---
 def agent_unzip_and_read(uploaded_file):
     temp_dir = Path("./temp_data")
     if temp_dir.exists(): shutil.rmtree(temp_dir)
@@ -33,49 +33,32 @@ def agent_unzip_and_read(uploaded_file):
             return None
     return dataframes
 
-# --- Funções de Conversão Atômicas (com tratamento de exceção aprimorado) ---
-
 def _try_convert_to_numeric(series: pl.Series) -> pl.Series | None:
-    """Tenta converter uma série de String para Float64."""
-    # DDR-FIX (Robustness): Captura qualquer exceção durante a conversão.
     try:
-        # Tenta a conversão estrita. Se falhar, a exceção é capturada.
         return series.str.replace_all(",", ".", literal=True).cast(pl.Float64, strict=True)
     except Exception:
-        # Se qualquer erro ocorrer, a conversão falhou. Retorna None.
         return None
 
 def _try_convert_to_date(series: pl.Series) -> pl.Series | None:
-    """Tenta converter uma série de String para Date usando múltiplos formatos."""
-    # DDR-FIX (Robustness): Captura qualquer exceção durante a conversão.
     try:
-        # Tenta a conversão estrita. Se falhar, a exceção é capturada.
         return series.str.to_date(formats=["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"], strict=True)
     except Exception:
-        # Se qualquer erro ocorrer, a conversão falhou. Retorna None.
         return None
 
 def _try_convert_to_categorical(series: pl.Series) -> pl.Series | None:
-    """Converte para Categórico se a cardinalidade for baixa."""
-    # Esta operação é segura e não precisa de try/except.
     if series.n_unique() / len(series) < CATEGORICAL_THRESHOLD:
         return series.cast(pl.Categorical)
     return None
 
-# --- AGENTE 2: SANITIZAÇÃO E ENRIQUECIMENTO (Sem alterações na lógica de orquestração) ---
 def agent_sanitize_and_enrich(dataframes: dict):
     sanitized_dfs = {}
     data_manifesto = "MANIFESTO DE DADOS DISPONÍVEIS (Após limpeza e otimização):\n\n"
-
     for name, df in dataframes.items():
         sanitized_df = df.clone()
-        
         for col_name in df.columns:
             original_series = sanitized_df[col_name]
-
             if original_series.dtype == pl.String:
                 clean_series = original_series.str.strip_chars()
-                
                 numeric_series = _try_convert_to_numeric(clean_series)
                 if numeric_series is not None:
                     final_series = numeric_series
@@ -89,41 +72,90 @@ def agent_sanitize_and_enrich(dataframes: dict):
                             final_series = categorical_series
                         else:
                             final_series = clean_series
-                
                 sanitized_df = sanitized_df.with_columns(final_series.alias(col_name))
-
         sanitized_dfs[name] = sanitized_df
-        data_manifesto += f"- Tabela '{name}':\n"
-        data_manifesto += f"  - Colunas e Tipos: {sanitized_df.schema}\n"
+        data_manifesto += f"- Tabela '{name}':\n  - Colunas e Tipos: {sanitized_df.schema}\n"
         data_manifesto += f"  - Amostra de dados:\n{sanitized_df.head(3).to_pandas().to_string()}\n\n"
-
     return sanitized_dfs, data_manifesto
 
-# --- AGENTE 3: CONSULTA COM IA (Sem alterações) ---
-def agent_query_llm(question, manifesto, dfs):
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    prompt = f"""
-    Você é um analista de dados sênior especialista na biblioteca Polars em Python.
-    Sua tarefa é traduzir a pergunta do usuário em um único bloco de código Python executável.
-    **Contexto Importante:** Os dados já passaram por um processo de limpeza e conversão de tipos. Você pode confiar nos tipos de dados descritos no manifesto abaixo.
-    **Restrições Estritas:**
-    1.  Use SOMENTE a biblioteca Polars.
-    2.  Os DataFrames estão em um dicionário chamado `dfs`. Acesse-os como `dfs['nome']`.
-    3.  Seu código DEVE atribuir o resultado final a uma variável chamada `result`.
-    4.  Responda APENAS com o bloco de código Python.
-    **Contexto dos Dados (Manifesto):**
-    {manifesto}
-    **Pergunta do Usuário:**
-    "{question}"
+# --- DDR-EXPANSION (Robustness & Intelligence): AGENTE 3: CONSULTA COM IA (AUTO-CORRETIVO) ---
+def agent_query_llm(question, manifesto, dfs, max_retries=1):
     """
-    try:
-        response = model.generate_content(prompt)
-        code_block = response.text.strip().replace('```python', '').replace('```', '').strip()
-        local_scope = {'dfs': dfs, 'pl': pl}
-        exec(code_block, {'pl': pl}, local_scope)
-        return local_scope.get('result', "Nenhum resultado encontrado."), code_block
-    except Exception as e:
-        return f"Erro ao executar o código gerado: {e}", None
+    Agente de Consulta com ciclo de auto-correção.
+    Tenta gerar e executar o código. Se falhar, ele reavalia o erro e tenta novamente.
+    """
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # Prompt inicial para a primeira tentativa
+    prompt = f"""
+    Você é um assistente de programação especialista EXCLUSIVAMENTE na biblioteca Polars para Python. Sua única tarefa é traduzir a pergunta do usuário em um bloco de código Polars executável.
+    **REGRAS CRÍTICAS:**
+    1.  **USE APENAS SINTAXE POLARS.**
+    2.  **ERRO COMUM A EVITAR:** A sintaxe de agrupamento em Polars é `group_by`. **NÃO USE `groupby` (de Pandas).**
+    3.  Os DataFrames estão em um dicionário `dfs`.
+    4.  O resultado final DEVE ser atribuído a uma variável `result`.
+    5.  Responda APENAS com o bloco de código Python.
+    **EXEMPLO:**
+    - Pergunta: "qual o cliente que mais comprou em valor?"
+    - Resposta:
+    ```
+result = dfs['vendas'].group_by('nome_cliente').agg(
+    pl.sum('valor_compra').alias('total_comprado')
+).sort('total_comprado', descending=True).limit(1)
+    ```
+    **MANIFESTO DE DADOS:**
+    {manifesto}
+    **TAREFA ATUAL:**
+    - Pergunta: "{question}"
+    - Gere o código Polars:
+    """
+    
+    last_error = None
+    code_block = ""
+
+    for attempt in range(max_retries + 1):
+        if attempt > 0: # Se for uma tentativa de correção
+            st.warning(f"Tentativa {attempt}: O código anterior falhou. Tentando corrigir...")
+            correction_prompt = f"""
+            O código que você gerou anteriormente falhou.
+            **Código com Erro:**
+            ```python
+            {code_block}
+            ```
+            **Mensagem de Erro:**
+            {last_error}
+
+            **Sua Tarefa:**
+            Analise o erro e o código. Reescreva o bloco de código Polars para corrigir o erro, seguindo todas as regras originais.
+            Responda APENAS com o bloco de código Python corrigido.
+            """
+            response = model.generate_content(correction_prompt)
+        else: # Primeira tentativa
+            response = model.generate_content(prompt)
+
+        # Limpeza do código retornado pelo LLM
+        code_block = response.text.strip()
+        if code_block.startswith("```python"): code_block = code_block[9:]
+        elif code_block.startswith("```"): code_block = code_block[3:]
+        if code_block.endswith("```"): code_block = code_block[:-3]
+        code_block = code_block.strip()
+
+        # DDR-EXPANSION (Robustness): Firewall Heurístico
+        if ".groupby(" in code_block:
+            last_error = "Erro Heurístico: Sintaxe proibida de Pandas '.groupby' detectada."
+            continue # Pula para a próxima tentativa (ciclo de correção)
+
+        try:
+            local_scope = {'dfs': dfs, 'pl': pl}
+            exec(code_block, {'pl': pl}, local_scope)
+            # Se chegou aqui, o código funcionou!
+            return local_scope.get('result', "Código executado, mas sem resultado."), code_block
+        except Exception as e:
+            last_error = str(e) # Salva o erro para a próxima iteração
+
+    # Se o loop terminar sem sucesso
+    return f"Falha ao gerar código funcional após {max_retries + 1} tentativas. Último erro: {last_error}", code_block
+
 
 # --- AGENTE 4: APRESENTAÇÃO DE RESULTADOS (Sem alterações) ---
 def agent_present_results(result, question):
@@ -131,7 +163,7 @@ def agent_present_results(result, question):
         st.dataframe(result.to_pandas(), use_container_width=True)
         try:
             if result.height > 1 and result.width >= 2:
-                categorical_col = result.columns[0]
+                categorical_col = result.columns
                 numerical_col = next((col for col in reversed(result.columns) if result[col].dtype in [pl.Float64, pl.Int64]), None)
                 if numerical_col:
                     st.subheader("Visualização Sugerida")
