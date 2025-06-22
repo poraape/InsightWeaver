@@ -1,5 +1,5 @@
-# agents_fixed_v2.py
-# Versão com o Agente de Sanitização corrigido para evitar o TypeError.
+# agents_final_professional.py
+# Versão profissional com bug corrigido e expansões de funções atômicas e tipo categórico.
 
 import streamlit as st
 import polars as pl
@@ -10,11 +10,13 @@ import shutil
 from pathlib import Path
 import plotly.express as px
 
+# --- DDR-EXPANSION (Clarity & Economy): Constantes de configuração ---
+CATEGORICAL_THRESHOLD = 0.5 # Se < 50% dos valores forem únicos, é uma categoria.
+
 # --- AGENTE 1: LEITURA BRUTA (Sem alterações) ---
 def agent_unzip_and_read(uploaded_file):
     temp_dir = Path("./temp_data")
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
+    if temp_dir.exists(): shutil.rmtree(temp_dir)
     temp_dir.mkdir(exist_ok=True)
     with zipfile.ZipFile(uploaded_file, 'r') as zip_ref:
         zip_ref.extractall(temp_dir)
@@ -31,7 +33,31 @@ def agent_unzip_and_read(uploaded_file):
             return None
     return dataframes
 
-# --- DDR-FIX (Robustness): AGENTE 2: SANITIZAÇÃO E ENRIQUECIMENTO (Lógica Corrigida) ---
+# --- DDR-EXPANSION (Abstracted): Funções de Conversão Atômicas ---
+
+def _try_convert_to_numeric(series: pl.Series) -> pl.Series | None:
+    """Tenta converter uma série de String para Float64."""
+    try:
+        converted_series = series.str.replace_all(",", ".", literal=True).cast(pl.Float64, strict=True)
+        return converted_series
+    except pl.ComputeError:
+        return None
+
+def _try_convert_to_date(series: pl.Series) -> pl.Series | None:
+    """Tenta converter uma série de String para Date usando múltiplos formatos."""
+    try:
+        converted_series = series.str.to_date(formats=["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"], strict=True)
+        return converted_series
+    except pl.ComputeError:
+        return None
+
+def _try_convert_to_categorical(series: pl.Series) -> pl.Series | None:
+    """Converte para Categórico se a cardinalidade for baixa."""
+    if series.n_unique() / len(series) < CATEGORICAL_THRESHOLD:
+        return series.cast(pl.Categorical)
+    return None
+
+# --- AGENTE 2: SANITIZAÇÃO E ENRIQUECIMENTO (Lógica Profissional) ---
 def agent_sanitize_and_enrich(dataframes: dict):
     sanitized_dfs = {}
     data_manifesto = "MANIFESTO DE DADOS DISPONÍVEIS (Após limpeza e otimização):\n\n"
@@ -39,28 +65,32 @@ def agent_sanitize_and_enrich(dataframes: dict):
     for name, df in dataframes.items():
         sanitized_df = df.clone()
         
-        # Itera sobre os nomes das colunas originais para evitar problemas com modificações no loop
         for col_name in df.columns:
-            # Apenas tenta converter colunas que são do tipo String
-            if sanitized_df[col_name].dtype == pl.String:
+            original_series = sanitized_df[col_name]
+
+            # Só processa colunas que são do tipo String
+            if original_series.dtype == pl.String:
                 
-                # 1. Limpeza: Sempre segura para colunas de string
-                sanitized_df = sanitized_df.with_columns(
-                    pl.col(col_name).str.strip_chars().alias(col_name)
-                )
+                # 1. Limpeza
+                clean_series = original_series.str.strip_chars()
                 
-                # 2. Tenta a conversão para numérico PRIMEIRO
-                numeric_col = pl.col(col_name).str.replace_all(",", ".", literal=True).cast(pl.Float64, strict=False)
-                # Verifica se a conversão foi bem-sucedida
-                if numeric_col.is_not_null().sum() > 0:
-                    sanitized_df = sanitized_df.with_columns(numeric_col)
+                # 2. Tentativas de Conversão em Ordem de Prioridade
+                numeric_series = _try_convert_to_numeric(clean_series)
+                if numeric_series is not None:
+                    final_series = numeric_series
+                else:
+                    date_series = _try_convert_to_date(clean_series)
+                    if date_series is not None:
+                        final_series = date_series
+                    else:
+                        categorical_series = _try_convert_to_categorical(clean_series)
+                        if categorical_series is not None:
+                            final_series = categorical_series
+                        else:
+                            final_series = clean_series # Mantém como string limpa
                 
-                # 3. Se a coluna AINDA for String (falhou na conversão numérica), tenta converter para data
-                elif sanitized_df[col_name].dtype == pl.String:
-                    date_col = pl.col(col_name).str.to_date(formats=["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"], strict=False)
-                    # Verifica se a conversão foi bem-sucedida
-                    if date_col.is_not_null().sum() > 0:
-                        sanitized_df = sanitized_df.with_columns(date_col)
+                # Atualiza a coluna no DataFrame com a versão final
+                sanitized_df = sanitized_df.with_columns(final_series.alias(col_name))
 
         sanitized_dfs[name] = sanitized_df
         data_manifesto += f"- Tabela '{name}':\n"
