@@ -1,5 +1,5 @@
-# agents_final_self_correcting.py
-# Versão definitiva com firewall heurístico e ciclo de auto-correção.
+# agents_final_proactive.py
+# Versão com leitura recursiva de arquivos e agente de sugestão de perguntas.
 
 import streamlit as st
 import polars as pl
@@ -13,26 +13,64 @@ import plotly.express as px
 # --- Constantes de configuração ---
 CATEGORICAL_THRESHOLD = 0.5
 
-# --- Funções Atômicas e Agentes de Leitura/Sanitização (Sem alterações) ---
+# --- DDR-FIX (Robustness): AGENTE 1: LEITURA BRUTA (com busca recursiva) ---
 def agent_unzip_and_read(uploaded_file):
     temp_dir = Path("./temp_data")
     if temp_dir.exists(): shutil.rmtree(temp_dir)
     temp_dir.mkdir(exist_ok=True)
     with zipfile.ZipFile(uploaded_file, 'r') as zip_ref:
         zip_ref.extractall(temp_dir)
-    csv_files = [f for f in os.listdir(temp_dir) if f.endswith('.csv')]
+    
+    # Usa os.walk para encontrar todos os CSVs em qualquer subpasta
+    csv_files = []
+    for root, _, files in os.walk(temp_dir):
+        for file in files:
+            if file.endswith('.csv'):
+                csv_files.append(Path(root) / file)
+
     if not csv_files: return None
+
     dataframes = {}
-    for file_name in csv_files:
-        df_name = file_name.replace('.csv', '')
+    for file_path in csv_files:
+        # Usa o nome do arquivo sem extensão como chave
+        df_name = file_path.stem
         try:
-            df = pl.read_csv(source=temp_dir / file_name, has_header=True, infer_schema_length=0, ignore_errors=True)
+            df = pl.read_csv(source=file_path, has_header=True, infer_schema_length=0, ignore_errors=True)
             dataframes[df_name] = df
         except Exception as e:
-            st.error(f"Erro crítico ao ler o arquivo {file_name}: {e}")
+            st.error(f"Erro crítico ao ler o arquivo {file_path.name}: {e}")
             return None
     return dataframes
 
+# --- DDR-EXPANSION (Intelligence): AGENTE 1.5: SUGESTÃO DE PERGUNTAS ---
+def agent_suggest_questions(manifesto: str):
+    """Usa o manifesto de dados para sugerir perguntas de negócio inteligentes."""
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    prompt = f"""
+    Você é um Analista de Negócios Sênior. Sua tarefa é analisar o seguinte manifesto de dados e propor 3 perguntas de negócio perspicazes que podem ser respondidas com os dados disponíveis.
+
+    **REGRAS:**
+    1.  As perguntas devem ser claras, concisas e orientadas a insights (ex: "Qual o produto mais vendido?", "Quem é o principal fornecedor?").
+    2.  Responda com uma lista Python de strings, e nada mais.
+    3.  Exemplo de Resposta: `["Qual foi o total de vendas por mês?", "Quais são os 5 principais clientes por valor de compra?", "Qual a margem de lucro por categoria de produto?"]`
+
+    **MANIFESTO DE DADOS:**
+    {manifesto}
+
+    **Gere a lista de 3 perguntas agora:**
+    """
+    try:
+        response = model.generate_content(prompt)
+        # Tenta avaliar a resposta como uma lista Python literal
+        suggested_list = eval(response.text)
+        if isinstance(suggested_list, list):
+            return suggested_list
+        return []
+    except Exception:
+        # Se a avaliação falhar, retorna uma lista vazia
+        return []
+
+# ... (O resto dos agentes e funções atômicas permanece o mesmo) ...
 def _try_convert_to_numeric(series: pl.Series) -> pl.Series | None:
     try:
         return series.str.replace_all(",", ".", literal=True).cast(pl.Float64, strict=True)
@@ -78,15 +116,8 @@ def agent_sanitize_and_enrich(dataframes: dict):
         data_manifesto += f"  - Amostra de dados:\n{sanitized_df.head(3).to_pandas().to_string()}\n\n"
     return sanitized_dfs, data_manifesto
 
-# --- DDR-EXPANSION (Robustness & Intelligence): AGENTE 3: CONSULTA COM IA (AUTO-CORRETIVO) ---
 def agent_query_llm(question, manifesto, dfs, max_retries=1):
-    """
-    Agente de Consulta com ciclo de auto-correção.
-    Tenta gerar e executar o código. Se falhar, ele reavalia o erro e tenta novamente.
-    """
     model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    # Prompt inicial para a primeira tentativa
     prompt = f"""
     Você é um assistente de programação especialista EXCLUSIVAMENTE na biblioteca Polars para Python. Sua única tarefa é traduzir a pergunta do usuário em um bloco de código Polars executável.
     **REGRAS CRÍTICAS:**
@@ -109,12 +140,10 @@ result = dfs['vendas'].group_by('nome_cliente').agg(
     - Pergunta: "{question}"
     - Gere o código Polars:
     """
-    
     last_error = None
     code_block = ""
-
     for attempt in range(max_retries + 1):
-        if attempt > 0: # Se for uma tentativa de correção
+        if attempt > 0:
             st.warning(f"Tentativa {attempt}: O código anterior falhou. Tentando corrigir...")
             correction_prompt = f"""
             O código que você gerou anteriormente falhou.
@@ -124,40 +153,29 @@ result = dfs['vendas'].group_by('nome_cliente').agg(
             ```
             **Mensagem de Erro:**
             {last_error}
-
             **Sua Tarefa:**
             Analise o erro e o código. Reescreva o bloco de código Polars para corrigir o erro, seguindo todas as regras originais.
             Responda APENAS com o bloco de código Python corrigido.
             """
             response = model.generate_content(correction_prompt)
-        else: # Primeira tentativa
+        else:
             response = model.generate_content(prompt)
-
-        # Limpeza do código retornado pelo LLM
         code_block = response.text.strip()
         if code_block.startswith("```python"): code_block = code_block[9:]
         elif code_block.startswith("```"): code_block = code_block[3:]
         if code_block.endswith("```"): code_block = code_block[:-3]
         code_block = code_block.strip()
-
-        # DDR-EXPANSION (Robustness): Firewall Heurístico
         if ".groupby(" in code_block:
             last_error = "Erro Heurístico: Sintaxe proibida de Pandas '.groupby' detectada."
-            continue # Pula para a próxima tentativa (ciclo de correção)
-
+            continue
         try:
             local_scope = {'dfs': dfs, 'pl': pl}
             exec(code_block, {'pl': pl}, local_scope)
-            # Se chegou aqui, o código funcionou!
             return local_scope.get('result', "Código executado, mas sem resultado."), code_block
         except Exception as e:
-            last_error = str(e) # Salva o erro para a próxima iteração
-
-    # Se o loop terminar sem sucesso
+            last_error = str(e)
     return f"Falha ao gerar código funcional após {max_retries + 1} tentativas. Último erro: {last_error}", code_block
 
-
-# --- AGENTE 4: APRESENTAÇÃO DE RESULTADOS (Sem alterações) ---
 def agent_present_results(result, question):
     if isinstance(result, pl.DataFrame):
         st.dataframe(result.to_pandas(), use_container_width=True)
