@@ -1,5 +1,5 @@
-# agents_final_professional.py
-# Versão profissional com bug corrigido e expansões de funções atômicas e tipo categórico.
+# agents_final_bulletproof.py
+# Versão final com tratamento de exceção universal para máxima robustez.
 
 import streamlit as st
 import polars as pl
@@ -10,8 +10,8 @@ import shutil
 from pathlib import Path
 import plotly.express as px
 
-# --- DDR-EXPANSION (Clarity & Economy): Constantes de configuração ---
-CATEGORICAL_THRESHOLD = 0.5 # Se < 50% dos valores forem únicos, é uma categoria.
+# --- Constantes de configuração ---
+CATEGORICAL_THRESHOLD = 0.5
 
 # --- AGENTE 1: LEITURA BRUTA (Sem alterações) ---
 def agent_unzip_and_read(uploaded_file):
@@ -33,31 +33,36 @@ def agent_unzip_and_read(uploaded_file):
             return None
     return dataframes
 
-# --- DDR-EXPANSION (Abstracted): Funções de Conversão Atômicas ---
+# --- Funções de Conversão Atômicas (com tratamento de exceção aprimorado) ---
 
 def _try_convert_to_numeric(series: pl.Series) -> pl.Series | None:
     """Tenta converter uma série de String para Float64."""
+    # DDR-FIX (Robustness): Captura qualquer exceção durante a conversão.
     try:
-        converted_series = series.str.replace_all(",", ".", literal=True).cast(pl.Float64, strict=True)
-        return converted_series
-    except pl.ComputeError:
+        # Tenta a conversão estrita. Se falhar, a exceção é capturada.
+        return series.str.replace_all(",", ".", literal=True).cast(pl.Float64, strict=True)
+    except Exception:
+        # Se qualquer erro ocorrer, a conversão falhou. Retorna None.
         return None
 
 def _try_convert_to_date(series: pl.Series) -> pl.Series | None:
     """Tenta converter uma série de String para Date usando múltiplos formatos."""
+    # DDR-FIX (Robustness): Captura qualquer exceção durante a conversão.
     try:
-        converted_series = series.str.to_date(formats=["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"], strict=True)
-        return converted_series
-    except pl.ComputeError:
+        # Tenta a conversão estrita. Se falhar, a exceção é capturada.
+        return series.str.to_date(formats=["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"], strict=True)
+    except Exception:
+        # Se qualquer erro ocorrer, a conversão falhou. Retorna None.
         return None
 
 def _try_convert_to_categorical(series: pl.Series) -> pl.Series | None:
     """Converte para Categórico se a cardinalidade for baixa."""
+    # Esta operação é segura e não precisa de try/except.
     if series.n_unique() / len(series) < CATEGORICAL_THRESHOLD:
         return series.cast(pl.Categorical)
     return None
 
-# --- AGENTE 2: SANITIZAÇÃO E ENRIQUECIMENTO (Lógica Profissional) ---
+# --- AGENTE 2: SANITIZAÇÃO E ENRIQUECIMENTO (Sem alterações na lógica de orquestração) ---
 def agent_sanitize_and_enrich(dataframes: dict):
     sanitized_dfs = {}
     data_manifesto = "MANIFESTO DE DADOS DISPONÍVEIS (Após limpeza e otimização):\n\n"
@@ -68,13 +73,9 @@ def agent_sanitize_and_enrich(dataframes: dict):
         for col_name in df.columns:
             original_series = sanitized_df[col_name]
 
-            # Só processa colunas que são do tipo String
             if original_series.dtype == pl.String:
-                
-                # 1. Limpeza
                 clean_series = original_series.str.strip_chars()
                 
-                # 2. Tentativas de Conversão em Ordem de Prioridade
                 numeric_series = _try_convert_to_numeric(clean_series)
                 if numeric_series is not None:
                     final_series = numeric_series
@@ -87,9 +88,8 @@ def agent_sanitize_and_enrich(dataframes: dict):
                         if categorical_series is not None:
                             final_series = categorical_series
                         else:
-                            final_series = clean_series # Mantém como string limpa
+                            final_series = clean_series
                 
-                # Atualiza a coluna no DataFrame com a versão final
                 sanitized_df = sanitized_df.with_columns(final_series.alias(col_name))
 
         sanitized_dfs[name] = sanitized_df
